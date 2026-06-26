@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "./ui/button";
 import { Select, Label, Input } from "./ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, Badge } from "./ui/card";
@@ -50,6 +51,7 @@ function defaultExpiryLocal(): string {
 }
 
 export function NoteManager({ noteId }: { noteId: string }) {
+  const router = useRouter();
   const [note, setNote] = useState<NoteDto | null>(null);
   const [links, setLinks] = useState<LinkDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -82,6 +84,25 @@ export function NoteManager({ noteId }: { noteId: string }) {
   async function revoke(id: string) {
     await fetch(`/api/shares/${id}/revoke`, { method: "POST" });
     load();
+  }
+
+  async function deleteLink(id: string) {
+    if (!window.confirm("Delete this share link permanently? This cannot be undone."))
+      return;
+    await fetch(`/api/shares/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  async function deleteNote() {
+    if (
+      !window.confirm(
+        "Delete this note and ALL of its share links permanently? This cannot be undone."
+      )
+    )
+      return;
+    await fetch(`/api/notes/${noteId}`, { method: "DELETE" });
+    router.push("/");
+    router.refresh();
   }
 
   async function addLink(e: React.FormEvent) {
@@ -120,10 +141,17 @@ export function NoteManager({ noteId }: { noteId: string }) {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>{note?.title}</CardTitle>
-          <CardDescription>
-            Created {note && new Date(note.createdAt).toLocaleString()}
-          </CardDescription>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle>{note?.title}</CardTitle>
+              <CardDescription>
+                Created {note && new Date(note.createdAt).toLocaleString()}
+              </CardDescription>
+            </div>
+            <Button variant="danger" size="sm" onClick={deleteNote}>
+              Delete note
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <p className="whitespace-pre-wrap text-sm">{note?.content}</p>
@@ -161,13 +189,16 @@ export function NoteManager({ noteId }: { noteId: string }) {
                         : "Not used yet"
                       : "No expiry"}
                   </span>
-                  {l.status === "ACTIVE" ? (
-                    <Button variant="danger" size="sm" onClick={() => revoke(l.id)}>
-                      Revoke
+                  <div className="flex items-center gap-2">
+                    {l.status === "ACTIVE" && (
+                      <Button variant="outline" size="sm" onClick={() => revoke(l.id)}>
+                        Revoke
+                      </Button>
+                    )}
+                    <Button variant="danger" size="sm" onClick={() => deleteLink(l.id)}>
+                      Delete
                     </Button>
-                  ) : (
-                    <span>—</span>
-                  )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
