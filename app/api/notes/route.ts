@@ -1,9 +1,9 @@
 import { NextRequest } from "next/server";
-import { withTransaction, query, type NoteRow } from "@/lib/db";
-import { requireUserId, json, badRequest } from "@/lib/http";
+import { withTransaction, type NoteRow } from "@/lib/db";
+import { requireUserId, json, badRequest, asAuthResponse } from "@/lib/http";
 import { createNoteSchema } from "@/lib/validation";
-import { createShareLink } from "@/lib/createShare";
-import { shareUrl } from "@/lib/url";
+import { createShareLink } from "@/lib/shares";
+import { shareUrl } from "@/lib/shares";
 
 // Create a note and its first share link atomically.
 export async function POST(req: NextRequest) {
@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
   try {
     userId = await requireUserId();
   } catch (res) {
-    return res as Response;
+    return asAuthResponse(res);
   }
 
   const body = await req.json().catch(() => null);
@@ -47,33 +47,4 @@ export async function POST(req: NextRequest) {
     },
     201
   );
-}
-
-// List the current user's notes.
-export async function GET() {
-  let userId: string;
-  try {
-    userId = await requireUserId();
-  } catch (res) {
-    return res as Response;
-  }
-
-  const notes = await query<NoteRow & { link_count: number }>(
-    `SELECT n.*, COUNT(s.id)::int AS link_count
-       FROM notes n
-       LEFT JOIN share_links s ON s.note_id = n.id
-      WHERE n.author_id = $1
-      GROUP BY n.id
-      ORDER BY n.created_at DESC`,
-    [userId]
-  );
-
-  return json({
-    notes: notes.map((n) => ({
-      id: n.id,
-      title: n.title,
-      createdAt: n.created_at,
-      linkCount: n.link_count,
-    })),
-  });
 }

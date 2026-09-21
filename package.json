@@ -3,13 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 4545",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 4545",
     "lint": "eslint",
     "db:setup": "psql \"$DATABASE_URL\" -f sql/001_init.sql",
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
-    "db:reset": "psql \"$DATABASE_URL\" -f sql/999_reset.sql && npm run db:setup"
+    "db:reset": "psql \"$DATABASE_URL\" -f sql/999_reset.sql && npm run db:setup",
+    "db:local": "node scripts/localdb.mjs start",
+    "db:local:stop": "node scripts/localdb.mjs stop"
   },
   "dependencies": {
     "@types/pg": "^8.20.0",
@@ -28,6 +30,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "embedded-postgres": "^18.4.0-beta.17",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",

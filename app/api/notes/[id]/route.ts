@@ -1,8 +1,8 @@
 import { query, type NoteRow, type ShareLinkRow } from "@/lib/db";
-import { requireUserId, json } from "@/lib/http";
+import { requireUserId, json, asAuthResponse } from "@/lib/http";
 import { NextResponse } from "next/server";
-import { computeStatus } from "@/lib/share";
-import { shareUrl } from "@/lib/url";
+import { computeStatus } from "@/lib/shares";
+import { shareUrl } from "@/lib/shares";
 
 // Owner-only: fetch a note with all of its share links (status + view counts).
 export async function GET(
@@ -13,7 +13,7 @@ export async function GET(
   try {
     userId = await requireUserId();
   } catch (res) {
-    return res as Response;
+    return asAuthResponse(res);
   }
   const { id } = await params;
 
@@ -68,7 +68,7 @@ export async function DELETE(
   try {
     userId = await requireUserId();
   } catch (res) {
-    return res as Response;
+    return asAuthResponse(res);
   }
   const { id } = await params;
 

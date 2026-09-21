@@ -3,12 +3,17 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "./ui/button";
-import { Select, Label, Input } from "./ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, Badge } from "./ui/card";
 import { CopyField } from "./CopyField";
+import {
+  AccessKeyNotice,
+  ShareFields,
+  defaultExpiryLocal,
+  toIsoOrNull,
+  type AccessType,
+  type ShareType,
+} from "./shareOptions";
 
-type ShareType = "ONE_TIME" | "TIME_BASED";
-type AccessType = "PUBLIC" | "PASSWORD_PROTECTED";
 type Status = "ACTIVE" | "REVOKED" | "EXPIRED_TIME" | "USED";
 
 interface LinkDto {
@@ -44,18 +49,13 @@ const statusLabel: Record<Status, string> = {
   USED: "Used",
 };
 
-function defaultExpiryLocal(): string {
-  const d = new Date(Date.now() + 60 * 60 * 1000);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 export function NoteManager({ noteId }: { noteId: string }) {
   const router = useRouter();
   const [note, setNote] = useState<NoteDto | null>(null);
   const [links, setLinks] = useState<LinkDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // new-link form state
   const [shareType, setShareType] = useState<ShareType>("ONE_TIME");
@@ -65,31 +65,70 @@ export function NoteManager({ noteId }: { noteId: string }) {
   const [newKey, setNewKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/notes/${noteId}`, { cache: "no-store" });
-    if (res.status === 404 || res.status === 401) {
-      setNotFound(true);
+    try {
+      const res = await fetch(`/api/notes/${noteId}`, { cache: "no-store" });
+      if (res.status === 404 || res.status === 401) {
+        setNotFound(true);
+        return;
+      }
+      if (!res.ok) {
+        setError("Could not load this note. Please retry.");
+        return;
+      }
+      const data = await res.json();
+      setNote(data.note);
+      setLinks(data.links);
+      setError(null);
+    } catch {
+      setError("Network error — could not reach the server.");
+    } finally {
       setLoading(false);
-      return;
     }
-    const data = await res.json();
-    setNote(data.note);
-    setLinks(data.links);
-    setLoading(false);
   }, [noteId]);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  // Every mutation goes through here so a failed request is reported instead
+  // of silently leaving the UI showing stale state.
+  async function mutate(
+    input: RequestInfo,
+    init: RequestInit,
+    failureMessage: string
+  ): Promise<Response | null> {
+    setError(null);
+    try {
+      const res = await fetch(input, init);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? failureMessage);
+        return null;
+      }
+      return res;
+    } catch {
+      setError("Network error — could not reach the server.");
+      return null;
+    }
+  }
+
   async function revoke(id: string) {
-    await fetch(`/api/shares/${id}/revoke`, { method: "POST" });
+    await mutate(
+      `/api/shares/${id}`,
+      { method: "PATCH" },
+      "Could not revoke this link."
+    );
     load();
   }
 
   async function deleteLink(id: string) {
     if (!window.confirm("Delete this share link permanently? This cannot be undone."))
       return;
-    await fetch(`/api/shares/${id}`, { method: "DELETE" });
+    await mutate(
+      `/api/shares/${id}`,
+      { method: "DELETE" },
+      "Could not delete this link."
+    );
     load();
   }
 
@@ -100,27 +139,41 @@ export function NoteManager({ noteId }: { noteId: string }) {
       )
     )
       return;
-    await fetch(`/api/notes/${noteId}`, { method: "DELETE" });
+    const res = await mutate(
+      `/api/notes/${noteId}`,
+      { method: "DELETE" },
+      "Could not delete this note."
+    );
+    if (!res) return;
     router.push("/");
     router.refresh();
   }
 
   async function addLink(e: React.FormEvent) {
     e.preventDefault();
-    setCreating(true);
     setNewKey(null);
-    const res = await fetch(`/api/notes/${noteId}/shares`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        shareType,
-        accessType,
-        expiresAt: shareType === "TIME_BASED" ? new Date(expiresAt).toISOString() : null,
-      }),
-    });
+
+    const expiry = shareType === "TIME_BASED" ? toIsoOrNull(expiresAt) : null;
+    if (shareType === "TIME_BASED" && !expiry) {
+      setError("Enter a valid expiry date and time.");
+      return;
+    }
+
+    setCreating(true);
+    const res = await mutate(
+      `/api/notes/${noteId}/shares`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shareType, accessType, expiresAt: expiry }),
+      },
+      "Could not create the share link."
+    );
     setCreating(false);
+    if (!res) return;
+
     const data = await res.json().catch(() => ({}));
-    if (res.ok && data.accessKey) setNewKey(data.accessKey);
+    if (data.accessKey) setNewKey(data.accessKey);
     load();
   }
 
@@ -139,6 +192,11 @@ export function NoteManager({ noteId }: { noteId: string }) {
 
   return (
     <div className="space-y-6">
+      {error && (
+        <p className="rounded-[var(--radius)] border border-[var(--danger)] px-3 py-2 text-sm text-[var(--danger)]">
+          {error}
+        </p>
+      )}
       <Card>
         <CardHeader>
           <div className="flex items-start justify-between gap-3">
@@ -212,35 +270,21 @@ export function NoteManager({ noteId }: { noteId: string }) {
         </CardHeader>
         <CardContent>
           <form onSubmit={addLink} className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="st">Share type</Label>
-                <Select id="st" value={shareType} onChange={(e) => setShareType(e.target.value as ShareType)}>
-                  <option value="ONE_TIME">One-time</option>
-                  <option value="TIME_BASED">Time-based</option>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="at">Access type</Label>
-                <Select id="at" value={accessType} onChange={(e) => setAccessType(e.target.value as AccessType)}>
-                  <option value="PUBLIC">Public</option>
-                  <option value="PASSWORD_PROTECTED">Password-protected</option>
-                </Select>
-              </div>
-            </div>
-            {shareType === "TIME_BASED" && (
-              <div className="space-y-1.5">
-                <Label htmlFor="ea">Expires at</Label>
-                <Input id="ea" type="datetime-local" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} required />
-              </div>
-            )}
+            <ShareFields
+              shareType={shareType}
+              accessType={accessType}
+              expiresAt={expiresAt}
+              onShareType={setShareType}
+              onAccessType={setAccessType}
+              onExpiresAt={setExpiresAt}
+            />
             <Button type="submit" disabled={creating}>
               {creating ? "Creating…" : "Generate link"}
             </Button>
           </form>
           {newKey && (
-            <div className="mt-4 rounded-[var(--radius)] border border-amber-200 bg-amber-50 p-3">
-              <CopyField label="Access key (shown only once!)" value={newKey} />
+            <div className="mt-4">
+              <AccessKeyNotice value={newKey} />
             </div>
           )}
         </CardContent>

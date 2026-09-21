@@ -24,6 +24,10 @@ export type AccessOutcome =
       meta?: { accessType: "PUBLIC" | "PASSWORD_PROTECTED" };
     };
 
+// Thrown inside the transaction to force a rollback when a link outlives its
+// note; translated to a NOT_FOUND outcome by accessNote().
+class MissingNoteError extends Error {}
+
 interface AccessInput {
   token: string;
   password?: string | null;
@@ -40,6 +44,19 @@ interface AccessInput {
  * `used_at` and wins, the second sees `used_at` set and loses.
  */
 export async function accessNote(input: AccessInput): Promise<AccessOutcome> {
+  try {
+    return await accessNoteInTransaction(input);
+  } catch (err) {
+    // The note vanished under the link — surface it as a dead link, and let
+    // the rollback undo the view count / one-time consumption.
+    if (err instanceof MissingNoteError) return { ok: false, reason: "NOT_FOUND" };
+    throw err;
+  }
+}
+
+async function accessNoteInTransaction(
+  input: AccessInput
+): Promise<AccessOutcome> {
   const { token, password, ipHash } = input;
 
   return withTransaction(async (client) => {
@@ -147,6 +164,9 @@ export async function accessNote(input: AccessInput): Promise<AccessOutcome> {
       [link.note_id]
     );
     const note = noteRows.rows[0];
+    // Defensive: a link without its note is unusable. Roll back rather than
+    // burning a one-time link (or counting a view) for content we can't serve.
+    if (!note) throw new MissingNoteError();
 
     return {
       ok: true,

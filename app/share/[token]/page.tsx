@@ -4,6 +4,17 @@ import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, Badge } from "@/components/ui/card";
 
+// Defined at module scope: a component declared inside the render body gets a
+// fresh identity on every render, so React remounts its whole subtree — which
+// made the access-key input lose focus after each keystroke.
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="mx-auto flex w-full max-w-xl flex-1 items-center px-4 py-12">
+      <div className="w-full">{children}</div>
+    </main>
+  );
+}
+
 type Status = "ACTIVE" | "REVOKED" | "EXPIRED_TIME" | "USED";
 interface Meta {
   found: boolean;
@@ -28,9 +39,13 @@ export default function SharePage({
   const [viewCount, setViewCount] = useState<number | null>(null);
 
   const loadMeta = useCallback(async () => {
-    const res = await fetch(`/api/share/${token}/meta`, { cache: "no-store" });
-    const data = await res.json().catch(() => ({ found: false }));
-    setMeta(data);
+    try {
+      const res = await fetch(`/api/share/${token}`, { cache: "no-store" });
+      const data = await res.json().catch(() => ({ found: false }));
+      setMeta(data);
+    } catch {
+      setMeta({ found: false });
+    }
   }, [token]);
 
   useEffect(() => {
@@ -40,11 +55,18 @@ export default function SharePage({
   async function attemptView(withPassword?: string) {
     setError(null);
     setLoading(true);
-    const res = await fetch(`/api/share/${token}/access`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: withPassword ?? null }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`/api/share/${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: withPassword ?? null }),
+      });
+    } catch {
+      setLoading(false);
+      setError("Network error — could not reach the server. Please try again.");
+      return;
+    }
     setLoading(false);
     const data = await res.json().catch(() => ({}));
 
@@ -79,15 +101,6 @@ export default function SharePage({
       default:
         setError("This share link is invalid.");
     }
-  }
-
-  // ---- render states ----
-  function Shell({ children }: { children: React.ReactNode }) {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-1 items-center px-4 py-12">
-        <div className="w-full">{children}</div>
-      </main>
-    );
   }
 
   if (!meta) {

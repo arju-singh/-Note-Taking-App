@@ -35,7 +35,8 @@ view counting and force-revoke.
 ### Prerequisites
 
 - Node.js 20+ (developed on Node 24)
-- PostgreSQL 14+ running locally (or any Postgres connection string)
+- PostgreSQL 14+ running locally (or any Postgres connection string) — or none
+  at all, and use the bundled `npm run db:local` (see step 3b)
 
 ### 1. Install dependencies
 
@@ -52,16 +53,18 @@ cp .env.example .env
 Edit `.env`:
 
 ```ini
-# Local Postgres via unix socket (macOS Homebrew default):
-DATABASE_URL="postgresql://<user>@localhost/peacock?host=/tmp"
+# Bundled zero-install Postgres (`npm run db:local`):
+DATABASE_URL="postgresql://postgres@127.0.0.1:5433/peacock"
+# …or local Postgres via unix socket (macOS Homebrew default):
+# DATABASE_URL="postgresql://<user>@localhost/peacock?host=/tmp"
 # …or standard TCP:
 # DATABASE_URL="postgresql://user:password@localhost:5432/peacock"
 
 AUTH_SECRET="a-long-random-secret-at-least-16-chars"
-NEXT_PUBLIC_APP_URL="http://localhost:3000"
+NEXT_PUBLIC_APP_URL="http://localhost:4545"
 ```
 
-### 3. Create the database & schema
+### 3a. Create the database & schema (system Postgres)
 
 ```bash
 createdb peacock                 # if it doesn't exist
@@ -72,11 +75,23 @@ npm run db:seed                  # creates demo users (see Test credentials)
 `db:setup` runs `psql "$DATABASE_URL" -f sql/001_init.sql`. (`psql` must be on
 your PATH.) To wipe and recreate: `npm run db:reset`.
 
+### 3b. …or no Postgres install at all
+
+```bash
+npm run db:local                 # init + start Postgres on 127.0.0.1:5433, apply schema
+npm run db:seed                  # creates demo users (see Test credentials)
+```
+
+`db:local` uses the real PostgreSQL binaries shipped by the `embedded-postgres`
+dev dependency — no Homebrew, Docker, or `psql` needed. Data persists in
+`.localdb/pgdata` (gitignored); stop the server with `npm run db:local:stop`.
+It is idempotent, so re-running it after a reboot just starts the server again.
+
 ### 4. Run
 
 ```bash
 npm run dev
-# open http://localhost:3000
+# open http://localhost:4545
 ```
 
 ### Test credentials
@@ -107,12 +122,12 @@ npm run dev
 | `POST /api/auth/login`               | Log in                                        |
 | `POST /api/auth/logout`              | Clear session                                 |
 | `POST /api/notes`                    | Create note + first share link (atomic)       |
-| `GET  /api/notes`                    | List your notes                               |
 | `GET  /api/notes/[id]`               | Note + its links (owner only)                 |
 | `POST /api/notes/[id]/shares`        | Add another share link to a note              |
-| `POST /api/shares/[id]/revoke`       | Force-invalidate a link (owner only)          |
-| `GET  /api/share/[token]/meta`       | Link status/type — **does not** count a view  |
-| `POST /api/share/[token]/access`     | Open the note — **the only** endpoint that counts views / consumes one-time links |
+| `PATCH  /api/shares/[id]`            | Force-invalidate (revoke) a link (owner only) |
+| `DELETE /api/shares/[id]`            | Delete a link (owner only)                    |
+| `GET  /api/share/[token]`            | Link status/type — **does not** count a view  |
+| `POST /api/share/[token]`            | Open the note — **the only** endpoint that counts views / consumes one-time links |
 
 ---
 
@@ -189,7 +204,7 @@ model ViewLog { id String @id @default(cuid()) shareLinkId String viewedAt DateT
 
 ### Password / key generation logic
 
-- **Token** (`lib/share.ts`): 24 chars from a 64-symbol URL-safe alphabet
+- **Token** (`lib/shares.ts`): 24 chars from a 64-symbol URL-safe alphabet
   (`nanoid`) ≈ **144 bits** of entropy — unguessable.
 - **Access key**: 16 chars from a 32-symbol alphabet that excludes ambiguous
   characters (`0/O`, `1/I/l`), formatted as `XXXX-XXXX-XXXX-XXXX` ≈ **80 bits** of
@@ -205,7 +220,7 @@ model ViewLog { id String @id @default(cuid()) shareLinkId String viewedAt DateT
 
 ### Invalidate / revoke logic
 
-- `POST /api/shares/[id]/revoke` sets `revoked = true` using
+- `PATCH /api/shares/[id]` sets `revoked = true` using
   `UPDATE … WHERE id = $1 AND creator_id = $2 RETURNING …` — the `WHERE` enforces
   ownership and the `RETURNING` distinguishes "revoked" from "not yours / not
   found". Revocation is checked first on every access, so a revoked link is dead
@@ -332,7 +347,7 @@ vercel --prod
 
 Notes:
 - Share links use `NEXT_PUBLIC_APP_URL`, falling back to Vercel's `VERCEL_URL`,
-  then `localhost` (see `lib/url.ts`) — so links are correct even if you don't set
+  then `localhost` (see `lib/shares.ts`) — so links are correct even if you don't set
   the variable.
 - Use Neon's **pooled** endpoint; serverless functions open many short-lived
   connections, and the pooler handles that gracefully.
@@ -344,21 +359,28 @@ Notes:
 
 ```
 app/
+  (app)/                signed-in area — layout.tsx holds the auth guard,
+                        navbar and page shell for every page inside
+    page.tsx            dashboard
+    notes/new, notes/[id]
+  login, register       auth pages (thin wrappers over components/AuthForm)
+  share/[token]         public recipient page
   api/…                 route handlers (auth, notes, shares, share access)
-  login, register, notes/new, notes/[id], share/[token]   pages
-components/             UI (Navbar, forms, shadcn-style ui/*)
+components/             UI (Navbar, AuthForm, note forms, shadcn-style ui/*)
 lib/
   db.ts                 pg pool + query() + withTransaction()
   auth.ts               bcrypt + JWT cookie session
   access.ts             ⭐ atomic, race-safe note-access logic
-  createShare.ts        share-link creation (token + key)
-  share.ts              token/key generation + status computation
-  ratelimit.ts          in-memory per-IP limiter
+  shares.ts             share links: token/key generation, status, URL, creation
+  http.ts               JSON response helpers + session guard
+  ratelimit.ts          in-memory limiter (per IP, per identity when unproxied)
   validation.ts         zod schemas
 sql/
   001_init.sql          schema
   999_reset.sql         drop-all (dev)
-scripts/seed.ts         demo users
+scripts/
+  seed.ts               demo users
+  localdb.mjs           zero-install local Postgres (npm run db:local)
 ```
 
 ## Scripts
@@ -367,7 +389,8 @@ scripts/seed.ts         demo users
 npm run dev        # dev server
 npm run build      # production build
 npm run start      # serve production build
-npm run db:setup   # apply schema
+npm run db:setup   # apply schema (system Postgres)
+npm run db:local   # start the bundled dev Postgres + apply schema
 npm run db:seed    # seed demo users
 npm run db:reset   # drop + recreate schema
 ```

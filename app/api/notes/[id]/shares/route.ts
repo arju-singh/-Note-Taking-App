@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTransaction } from "@/lib/db";
-import { requireUserId, json, badRequest } from "@/lib/http";
+import { requireUserId, json, badRequest, asAuthResponse } from "@/lib/http";
 import { shareConfigSchema } from "@/lib/validation";
-import { createShareLink } from "@/lib/createShare";
-import { shareUrl } from "@/lib/url";
+import { createShareLink } from "@/lib/shares";
+import { shareUrl } from "@/lib/shares";
 
 // Create an ADDITIONAL share link for an existing (owned) note.
 export async function POST(
@@ -14,7 +14,7 @@ export async function POST(
   try {
     userId = await requireUserId();
   } catch (res) {
-    return res as Response;
+    return asAuthResponse(res);
   }
   const { id } = await params;
 
